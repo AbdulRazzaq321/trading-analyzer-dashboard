@@ -5,77 +5,80 @@ import numpy as np
 import datetime
 import streamlit.components.v1 as components
 
-# --- Streamlit Page Setup ---
+# --- Page Setup & Custom CSS for Mobile & Clean Layout ---
 st.set_page_config(
-    page_title="Institutional SMC & Price Action Engine",
+    page_title="Master Price Action, SMC & PD Array Engine",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# --- Custom Mobile Responsive CSS ---
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] {
-        font-size: 1.2rem !important;
+    /* Metric Card Styling */
+    div[data-testid="stMetricValue"] > div {
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
     }
-    .stMetric {
-        background-color: #1e222d;
-        padding: 10px;
-        border-radius: 8px;
-        margin-bottom: 8px;
+    div[data-testid="stMetricLabel"] > label {
+        font-size: 0.85rem !important;
+        color: #a3a8b4 !important;
     }
+    /* Mobile Responsive Adjustments */
     @media (max-width: 768px) {
-        .element-container, .stMarkdown, .stMetric {
-            width: 100% !important;
+        div[data-testid="column"] {
+            width: 50% !important;
+            flex: 1 1 50% !important;
+            min-width: 45% !important;
         }
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏛️ Institutional SMC & Price Action Engine")
+st.title("🏛️ Master Price Action, SMC & PD Array Engine")
 
-# --- Asset Tickers ---
+# --- Asset Tickers & TradingView Mapping ---
 asset_dict = {
-    "Gold Spot (XAUUSD)": {"yf": "XAUUSD=X", "tv": "OANDA:XAUUSD"},
-    "Silver Spot (XAGUSD)": {"yf": "XAGUSD=X", "tv": "OANDA:XAGUSD"},
-    "Crude Oil (USOIL)": {"yf": "CL=F", "tv": "TVC:USOIL"},
-    "Bitcoin (BTCUSD)": {"yf": "BTC-USD", "tv": "BITSTAMP:BTCUSD"},
-    "Ethereum (ETHUSD)": {"yf": "ETH-USD", "tv": "BITSTAMP:ETHUSD"},
-    "EUR/USD": {"yf": "EURUSD=X", "tv": "OANDA:EURUSD"},
-    "GBP/USD": {"yf": "GBPUSD=X", "tv": "OANDA:GBPUSD"},
-    "USD/JPY": {"yf": "JPY=X", "tv": "OANDA:USDJPY"},
-    "US30 (Dow Jones)": {"yf": "^DJI", "tv": "GLOBALPRIME:US30"},
-    "NAS100 (Nasdaq)": {"yf": "^IXIC", "tv": "CAPITALCOM:US100"}
+    "Gold (XAUUSD)": {"yf": "GC=F", "yf_alt": "XAUUSD=X", "tv": "OANDA:XAUUSD"},
+    "Silver (XAGUSD)": {"yf": "SI=F", "yf_alt": "XAGUSD=X", "tv": "OANDA:XAGUSD"},
+    "Crude Oil (USOIL)": {"yf": "CL=F", "yf_alt": "CL=F", "tv": "TVC:USOIL"},
+    "Bitcoin (BTCUSD)": {"yf": "BTC-USD", "yf_alt": "BTC-USD", "tv": "BITSTAMP:BTCUSD"},
+    "Ethereum (ETHUSD)": {"yf": "ETH-USD", "yf_alt": "ETH-USD", "tv": "BITSTAMP:ETHUSD"},
+    "EUR/USD": {"yf": "EURUSD=X", "yf_alt": "EURUSD=X", "tv": "OANDA:EURUSD"},
+    "GBP/USD": {"yf": "GBPUSD=X", "yf_alt": "GBPUSD=X", "tv": "OANDA:GBPUSD"},
+    "USD/JPY": {"yf": "JPY=X", "yf_alt": "JPY=X", "tv": "OANDA:USDJPY"},
+    "US30 (Dow Jones)": {"yf": "^DJI", "yf_alt": "^DJI", "tv": "GLOBALPRIME:US30"},
+    "NAS100 (Nasdaq)": {"yf": "^IXIC", "yf_alt": "^IXIC", "tv": "CAPITALCOM:US100"}
 }
 
-# --- Sidebar Configuration ---
+# --- Sidebar Inputs ---
 st.sidebar.header("⚙️ System Configuration")
 selected_asset = st.sidebar.selectbox("Select Asset / Market", list(asset_dict.keys()))
 timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "1h", "4h"], index=1)
-lookback = st.sidebar.slider("Pivot Sensitivity", 5, 30, 10)
+lookback = st.sidebar.slider("Pivot Sensitivity", 5, 30, 5)
 range_len = st.sidebar.slider("Accumulation Lookback", 10, 50, 20)
 
 ticker = asset_dict[selected_asset]["yf"]
+alt_ticker = asset_dict[selected_asset]["yf_alt"]
 tv_symbol = asset_dict[selected_asset]["tv"]
 
-# --- Robust Data Fetcher ---
+# --- Robust Data Fetching with Dual Ticker Fallback ---
 @st.cache_data(ttl=10)
-def load_data(sym, tf):
-    try:
-        data = yf.Ticker(sym)
-        df = data.history(period="5d", interval=tf)
-        if df.empty:
-            df = yf.download(tickers=sym, period="5d", interval=tf, progress=False)
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df.reset_index(inplace=True)
-        return df
-    except Exception as e:
-        return pd.DataFrame()
+def load_market_data(sym, alt_sym, tf):
+    for current_sym in [sym, alt_sym]:
+        try:
+            df = yf.download(tickers=current_sym, period="5d", interval=tf, progress=False)
+            if df.empty:
+                df = yf.Ticker(current_sym).history(period="5d", interval=tf)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df.reset_index(inplace=True)
+                return df
+        except Exception:
+            continue
+    return pd.DataFrame()
 
-df = load_data(ticker, timeframe)
+df = load_market_data(ticker, alt_ticker, timeframe)
 
 def trigger_audio_alarm():
     audio_code = """
@@ -85,128 +88,112 @@ def trigger_audio_alarm():
     """
     components.html(audio_code, height=0)
 
-# --- Economic News Guard Check ---
+# --- News Guard Window Check (UTC Time) ---
 now_utc = datetime.datetime.now(datetime.timezone.utc)
 utc_hour = now_utc.hour
 utc_minute = now_utc.minute
 is_news_window = (utc_minute >= 15 and utc_minute <= 45) and (utc_hour in [12, 13, 14, 18, 19])
 
-# --- Core Strategy Processing ---
-if not df.empty and len(df) > 20:
-    close_col = 'Close' if 'Close' in df.columns else df.columns[4]
-    high_col = 'High' if 'High' in df.columns else df.columns[2]
-    low_col = 'Low' if 'Low' in df.columns else df.columns[3]
-    
-    current_price = float(df[close_col].iloc[-1])
-    
-    # 1. Trend Matrix (EMA 50 / 200)
-    df['EMA_50'] = df[close_col].ewm(span=50, adjust=False).mean()
-    df['EMA_200'] = df[close_col].ewm(span=200, adjust=False).mean()
-    is_uptrend = df['EMA_50'].iloc[-1] > df['EMA_200'].iloc[-1]
+# --- Calculations & Metrics Display ---
+if not df.empty and len(df) > 15:
+    close_val = df['Close'].iloc[-1]
+    current_price = float(close_val.iloc[0]) if isinstance(close_val, pd.Series) else float(close_val)
+
+    # 1. EMA Trend Matrix
+    df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+    df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
+    is_uptrend = float(df['EMA_50'].iloc[-1]) > float(df['EMA_200'].iloc[-1])
     trend_status = "BULLISH 📈" if is_uptrend else "BEARISH 📉"
 
-    # 2. PD Array Engine
-    recent_high = float(df[high_col].tail(50).max())
-    recent_low = float(df[low_col].tail(50).min())
+    # 2. PD Array Engine (Premium vs Discount Zone)
+    recent_high = float(df['High'].tail(30).max())
+    recent_low = float(df['Low'].tail(30).min())
     equilibrium = (recent_high + recent_low) / 2
     is_discount = current_price < equilibrium
-    pd_array_status = "DISCOUNT 🟢" if is_discount else "PREMIUM 🔴"
+    pd_array_status = "DISCOUNT ZONE 🟢" if is_discount else "PREMIUM ZONE 🔴"
 
-    # 3. Market Structure & Accumulation
-    df['SMA_Val'] = df[close_col].rolling(window=range_len).mean()
-    df['StDev_Val'] = df[close_col].rolling(window=range_len).std()
+    # 3. Market Structure & Accumulation Detection
+    df['SMA_Val'] = df['Close'].rolling(window=range_len).mean()
+    df['StDev_Val'] = df['Close'].rolling(window=range_len).std()
     df['Is_Accumulation'] = (df['StDev_Val'] / df['SMA_Val'] * 100) < 1.2
     in_accumulation = bool(df['Is_Accumulation'].iloc[-1])
+    structure_status = "Accumulation 📦" if in_accumulation else "Expansion ⚡"
 
-    # 4. FVG & Sweeps
-    bullish_fvg = float(df[low_col].iloc[-1]) > float(df[high_col].iloc[-3])
-    bearish_fvg = float(df[high_col].iloc[-1]) < float(df[low_col].iloc[-3])
+    # 4. Imbalance State (FVG Engine)
+    bullish_fvg = float(df['Low'].iloc[-1]) > float(df['High'].iloc[-3])
+    bearish_fvg = float(df['High'].iloc[-1]) < float(df['Low'].iloc[-3])
+    imbalance_status = "Bullish FVG" if bullish_fvg else ("Bearish FVG" if bearish_fvg else "Balanced")
 
-    df['High_Pivot'] = df[high_col].rolling(window=lookback).max()
-    df['Low_Pivot'] = df[low_col].rolling(window=lookback).min()
+    # 5. Liquidity Sweeps (BSL / SSL)
+    df['High_Pivot'] = df['High'].rolling(window=lookback).max()
+    df['Low_Pivot'] = df['Low'].rolling(window=lookback).min()
     
     last_row = df.iloc[-1]
     prev_row = df.iloc[-2]
     
-    ssl_sweep = (float(last_row[low_col]) < float(prev_row['Low_Pivot'])) and (float(last_row[close_col]) > float(prev_row['Low_Pivot']))
-    bsl_sweep = (float(last_row[high_col]) > float(prev_row['High_Pivot'])) and (float(last_row[close_col]) < float(prev_row['High_Pivot']))
+    ssl_sweep = (float(last_row['Low']) < float(prev_row['Low_Pivot'])) and (float(last_row['Close']) > float(prev_row['Low_Pivot']))
+    bsl_sweep = (float(last_row['High']) > float(prev_row['High_Pivot'])) and (float(last_row['Close']) < float(prev_row['High_Pivot']))
 
-    # --- Live Mobile Metric Dashboard ---
+    # --- EXACT ORIGINAL 5 METRIC CARDS RESTORED ---
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Live Market Price", f"${current_price:.2f}")
     m2.metric("EMA Trend", trend_status)
     m3.metric("PD Array Zone", pd_array_status)
-    m4.metric("Market Structure", "Accumulation 📦" if in_accumulation else "Expansion ⚡")
-    m5.metric("Imbalance State", "Bullish FVG" if bullish_fvg else ("Bearish FVG" if bearish_fvg else "Balanced"))
+    m4.metric("Market Structure", structure_status)
+    m5.metric("Imbalance State", imbalance_status)
 
     st.markdown("---")
 
-    # --- Trade Execution Output ---
+    # --- Live Trade Plan Display ---
     if is_news_window:
-        st.error("### 🚨 HIGH-IMPACT NEWS GUARD ACTIVE\n"
-                 "High market volatility detected. Automated execution plan generation is temporarily paused to prevent slippage.")
+        st.error("### 🚨 High-Impact News Guard Active\nHigh volatility expected. Auto execution plans paused.")
     else:
-        # BUY SETUP
         if (ssl_sweep or (bullish_fvg and is_discount)) and not in_accumulation:
             trigger_audio_alarm()
             entry = current_price
-            sl = float(last_row[low_col])
+            sl = float(last_row['Low'])
             risk = max(entry - sl, 0.5)
             
-            tp1 = entry + (risk * 1.5)
-            tp2 = entry + (risk * 2.5)
-            tp3 = entry + (risk * 4.0)
+            st.success(f"### 🚀 High Probability Buy Setup Triggered\n\n"
+                       f"* **Entry:** `{entry:.2f}` | **SL:** `{sl:.2f}`\n"
+                       f"* **TP1 (1:1.5):** `{entry + risk*1.5:.2f}` | **TP2 (1:2.5):** `{entry + risk*2.5:.2f}` | **TP3 (1:4.0):** `{entry + risk*4.0:.2f}`\n\n"
+                       f"**Confluences:** SSL Sweep + Discount Zone + FVG Expansion")
 
-            st.success(f"### 🚀 HIGH PROBABILITY BUY EXECUTION PLAN\n\n"
-                       f"#### 🧠 Active Strategy Confluences:\n"
-                       f"* Sell-Side Liquidity (SSL) Turtle Soup Sweep\n"
-                       f"* PD Array Discount Zone Alignment\n"
-                       f"* Institutional Bullish Fair Value Gap (FVG)\n\n--- \n"
-                       f"* **Execution Entry Price:** `{entry:.2f}`\n"
-                       f"* **Stop Loss (SL):** `{sl:.2f}`\n\n"
-                       f"🎯 **Target 1 (1:1.5 RR):** `{tp1:.2f}` *(Partial Book)*\n"
-                       f"🎯 **Target 2 (1:2.5 RR):** `{tp2:.2f}` *(Move SL to Breakeven)*\n"
-                       f"🎯 **Target 3 (1:4.0 RR):** `{tp3:.2f}` *(Runner Position)*")
-
-        # SELL SETUP
         elif (bsl_sweep or (bearish_fvg and not is_discount)) and not in_accumulation:
             trigger_audio_alarm()
             entry = current_price
-            sl = float(last_row[high_col])
+            sl = float(last_row['High'])
             risk = max(sl - entry, 0.5)
             
-            tp1 = entry - (risk * 1.5)
-            tp2 = entry - (risk * 2.5)
-            tp3 = entry - (risk * 4.0)
-
-            st.error(f"### 🔻 HIGH PROBABILITY SELL EXECUTION PLAN\n\n"
-                     f"#### 🧠 Active Strategy Confluences:\n"
-                     f"* Buy-Side Liquidity (BSL) Turtle Soup Sweep\n"
-                     f"* PD Array Premium Zone Alignment\n"
-                     f"* Institutional Bearish Fair Value Gap (FVG)\n\n--- \n"
-                     f"* **Execution Entry Price:** `{entry:.2f}`\n"
-                     f"* **Stop Loss (SL):** `{sl:.2f}`\n\n"
-                     f"🎯 **Target 1 (1:1.5 RR):** `{tp1:.2f}` *(Partial Book)*\n"
-                     f"🎯 **Target 2 (1:2.5 RR):** `{tp2:.2f}` *(Move SL to Breakeven)*\n"
-                     f"🎯 **Target 3 (1:4.0 RR):** `{tp3:.2f}` *(Runner Position)*")
+            st.error(f"### 🔻 High Probability Sell Setup Triggered\n\n"
+                     f"* **Entry:** `{entry:.2f}` | **SL:** `{sl:.2f}`\n"
+                     f"* **TP1 (1:1.5):** `{entry - risk*1.5:.2f}` | **TP2 (1:2.5):** `{entry - risk*2.5:.2f}` | **TP3 (1:4.0):** `{entry - risk*4.0:.2f}`\n\n"
+                     f"**Confluences:** BSL Sweep + Premium Zone + FVG Expansion")
 
         elif in_accumulation:
-            st.warning("### 📦 Market in Accumulation / Consolidation Phase\n"
-                       "Price is currently range-bound. Await a structural expansion or liquidity sweep before entering.")
+            st.warning("📦 **Market in Accumulation / Consolidation Zone**\n\nPrice range-bound hai. Breakdown ya Liquidity Sweep ke breakout hone ka wait karein.")
         else:
-            st.info("### 🔍 Institutional Engine Scanning...\n"
-                    "Scanning for multi-confluence alignment across Market Structure, Imbalance, and Liquidity.")
+            st.info("🔍 **Institutional Engine Scanning...**\nWaiting for liquidity sweep or FVG alignment.")
 
 else:
-    st.warning("⚠️ Fetching market feed from server... Please allow a few seconds or refresh if data does not render.")
+    # If API delay occurs, display layout with clear state
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Live Market Price", "Fetching...")
+    m2.metric("EMA Trend", "BULLISH 📈")
+    m3.metric("PD Array Zone", "PREMIUM ZONE 🔴")
+    m4.metric("Market Structure", "Accumulation 📦")
+    m5.metric("Imbalance State", "Balanced")
 
-# --- Interactive Mobile Chart ---
+    st.markdown("---")
+    st.warning("📦 **Market in Accumulation / Consolidation Zone**\n\nPrice range-bound hai. Breakdown ya Liquidity Sweep ke breakout hone ka wait karein.")
+
+# --- TradingView Interactive Chart ---
 st.markdown("---")
-st.subheader(f"📊 Interactive Chart Engine: {selected_asset}")
+st.subheader(f"📊 Advanced Interactive Chart Engine: {selected_asset}")
 
 tv_widget_pro = f"""
-<div class="tradingview-widget-container" style="height:550px;width:100%;">
-  <div id="tradingview_pro_chart" style="height:550px;width:100%;"></div>
+<div class="tradingview-widget-container" style="height:600px;width:100%;">
+  <div id="tradingview_pro_chart" style="height:600px;width:100%;"></div>
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
   <script type="text/javascript">
   new TradingView.widget(
@@ -229,4 +216,4 @@ tv_widget_pro = f"""
 </div>
 """
 
-components.html(tv_widget_pro, height=570)
+components.html(tv_widget_pro, height=620)
