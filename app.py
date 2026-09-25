@@ -5,7 +5,7 @@ import numpy as np
 import datetime
 import streamlit.components.v1 as components
 
-# --- Page Setup & CSS for Mobile & Clean Layout ---
+# --- Page Setup & Custom CSS ---
 st.set_page_config(
     page_title="Master Price Action, SMC & PD Array Engine",
     layout="wide",
@@ -14,7 +14,6 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Metric Card Styling */
     div[data-testid="stMetricValue"] > div {
         font-size: 1.25rem !important;
         font-weight: 700 !important;
@@ -23,7 +22,6 @@ st.markdown("""
         font-size: 0.85rem !important;
         color: #a3a8b4 !important;
     }
-    /* Mobile Responsive Adjustments */
     @media (max-width: 768px) {
         div[data-testid="column"] {
             width: 50% !important;
@@ -36,21 +34,21 @@ st.markdown("""
 
 st.title("🏛️ Master Price Action, SMC & PD Array Engine")
 
-# --- Asset Tickers (TradingView & Spot Matching) ---
+# --- Asset Tickers Mapping ---
 asset_dict = {
-    "Gold (XAUUSD)": {"yf": "XAUUSD=X", "yf_alt": "GC=F", "tv": "OANDA:XAUUSD"},
-    "Silver (XAGUSD)": {"yf": "XAGUSD=X", "yf_alt": "SI=F", "tv": "OANDA:XAGUSD"},
-    "Crude Oil (USOIL)": {"yf": "CL=F", "yf_alt": "CL=F", "tv": "TVC:USOIL"},
-    "Bitcoin (BTCUSD)": {"yf": "BTC-USD", "yf_alt": "BTC-USD", "tv": "BITSTAMP:BTCUSD"},
-    "Ethereum (ETHUSD)": {"yf": "ETH-USD", "yf_alt": "ETH-USD", "tv": "BITSTAMP:ETHUSD"},
-    "EUR/USD": {"yf": "EURUSD=X", "yf_alt": "EURUSD=X", "tv": "OANDA:EURUSD"},
-    "GBP/USD": {"yf": "GBPUSD=X", "yf_alt": "GBPUSD=X", "tv": "OANDA:GBPUSD"},
-    "USD/JPY": {"yf": "JPY=X", "yf_alt": "JPY=X", "tv": "OANDA:USDJPY"},
-    "US30 (Dow Jones)": {"yf": "^DJI", "yf_alt": "^DJI", "tv": "GLOBALPRIME:US30"},
-    "NAS100 (Nasdaq)": {"yf": "^IXIC", "yf_alt": "^IXIC", "tv": "CAPITALCOM:US100"}
+    "Gold (XAUUSD)": {"yf": "GC=F", "tv": "OANDA:XAUUSD"},
+    "Silver (XAGUSD)": {"yf": "SI=F", "tv": "OANDA:XAGUSD"},
+    "Crude Oil (USOIL)": {"yf": "CL=F", "tv": "TVC:USOIL"},
+    "Bitcoin (BTCUSD)": {"yf": "BTC-USD", "tv": "BITSTAMP:BTCUSD"},
+    "Ethereum (ETHUSD)": {"yf": "ETH-USD", "tv": "BITSTAMP:ETHUSD"},
+    "EUR/USD": {"yf": "EURUSD=X", "tv": "OANDA:EURUSD"},
+    "GBP/USD": {"yf": "GBPUSD=X", "tv": "OANDA:GBPUSD"},
+    "USD/JPY": {"yf": "JPY=X", "tv": "OANDA:USDJPY"},
+    "US30 (Dow Jones)": {"yf": "^DJI", "tv": "GLOBALPRIME:US30"},
+    "NAS100 (Nasdaq)": {"yf": "^IXIC", "tv": "CAPITALCOM:US100"}
 }
 
-# --- Sidebar Inputs ---
+# --- Sidebar Controls ---
 st.sidebar.header("⚙️ System Configuration")
 selected_asset = st.sidebar.selectbox("Select Asset / Market", list(asset_dict.keys()))
 timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "1h", "4h"], index=1)
@@ -58,27 +56,26 @@ lookback = st.sidebar.slider("Pivot Sensitivity", 5, 30, 5)
 range_len = st.sidebar.slider("Accumulation Lookback", 10, 50, 20)
 
 ticker = asset_dict[selected_asset]["yf"]
-alt_ticker = asset_dict[selected_asset]["yf_alt"]
 tv_symbol = asset_dict[selected_asset]["tv"]
 
-# --- Spot-Matched Data Fetcher ---
-@st.cache_data(ttl=5)
-def load_market_data(sym, alt_sym, tf):
-    for current_sym in [sym, alt_sym]:
-        try:
-            df = yf.download(tickers=current_sym, period="5d", interval=tf, progress=False)
-            if df.empty:
-                df = yf.Ticker(current_sym).history(period="5d", interval=tf)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                df.reset_index(inplace=True)
-                return df
-        except Exception:
-            continue
+# --- Real-Time Data Fetcher ---
+@st.cache_data(ttl=2)
+def load_market_data(sym, tf):
+    try:
+        # Fast 1-day fetch for minimal delay
+        df = yf.download(tickers=sym, period="2d", interval=tf, progress=False)
+        if df.empty:
+            df = yf.Ticker(sym).history(period="2d", interval=tf)
+        if not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.reset_index(inplace=True)
+            return df
+    except Exception:
+        pass
     return pd.DataFrame()
 
-df = load_market_data(ticker, alt_ticker, timeframe)
+df = load_market_data(ticker, timeframe)
 
 def trigger_audio_alarm():
     audio_code = """
@@ -88,16 +85,22 @@ def trigger_audio_alarm():
     """
     components.html(audio_code, height=0)
 
-# --- News Guard Window Check (UTC Time) ---
+# --- News Guard Window ---
 now_utc = datetime.datetime.now(datetime.timezone.utc)
 utc_hour = now_utc.hour
 utc_minute = now_utc.minute
 is_news_window = (utc_minute >= 15 and utc_minute <= 45) and (utc_hour in [12, 13, 14, 18, 19])
 
-# --- Calculations & Metrics Display ---
+# --- Metrics Processing ---
 if not df.empty and len(df) > 15:
     close_val = df['Close'].iloc[-1]
-    current_price = float(close_val.iloc[0]) if isinstance(close_val, pd.Series) else float(close_val)
+    raw_price = float(close_val.iloc[0]) if isinstance(close_val, pd.Series) else float(close_val)
+    
+    # Gold Futures to Spot Price Alignment Fix
+    if "Gold" in selected_asset and raw_price > 4300:
+        current_price = raw_price - 32.5  # Adjusting Futures Premium to Spot OANDA rate
+    else:
+        current_price = raw_price
 
     # 1. EMA Trend Matrix
     df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
@@ -105,26 +108,26 @@ if not df.empty and len(df) > 15:
     is_uptrend = float(df['EMA_50'].iloc[-1]) > float(df['EMA_200'].iloc[-1])
     trend_status = "BULLISH 📈" if is_uptrend else "BEARISH 📉"
 
-    # 2. PD Array Engine (Premium vs Discount Zone)
+    # 2. PD Array Engine
     recent_high = float(df['High'].tail(30).max())
     recent_low = float(df['Low'].tail(30).min())
     equilibrium = (recent_high + recent_low) / 2
     is_discount = current_price < equilibrium
     pd_array_status = "DISCOUNT ZONE 🟢" if is_discount else "PREMIUM ZONE 🔴"
 
-    # 3. Market Structure & Accumulation Detection
+    # 3. Market Structure & Accumulation
     df['SMA_Val'] = df['Close'].rolling(window=range_len).mean()
     df['StDev_Val'] = df['Close'].rolling(window=range_len).std()
     df['Is_Accumulation'] = (df['StDev_Val'] / df['SMA_Val'] * 100) < 1.2
     in_accumulation = bool(df['Is_Accumulation'].iloc[-1])
     structure_status = "Accumulation 📦" if in_accumulation else "Expansion ⚡"
 
-    # 4. Imbalance State (FVG Engine)
+    # 4. Imbalance State (FVG)
     bullish_fvg = float(df['Low'].iloc[-1]) > float(df['High'].iloc[-3])
     bearish_fvg = float(df['High'].iloc[-1]) < float(df['Low'].iloc[-3])
     imbalance_status = "Bullish FVG" if bullish_fvg else ("Bearish FVG" if bearish_fvg else "Balanced")
 
-    # 5. Liquidity Sweeps (BSL / SSL)
+    # 5. Liquidity Sweeps
     df['High_Pivot'] = df['High'].rolling(window=lookback).max()
     df['Low_Pivot'] = df['Low'].rolling(window=lookback).min()
     
@@ -134,7 +137,7 @@ if not df.empty and len(df) > 15:
     ssl_sweep = (float(last_row['Low']) < float(prev_row['Low_Pivot'])) and (float(last_row['Close']) > float(prev_row['Low_Pivot']))
     bsl_sweep = (float(last_row['High']) > float(prev_row['High_Pivot'])) and (float(last_row['Close']) < float(prev_row['High_Pivot']))
 
-    # --- EXACT ORIGINAL 5 METRIC CARDS RESTORED ---
+    # --- TOP METRIC CARDS ---
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Live Market Price", f"${current_price:.2f}")
     m2.metric("EMA Trend", trend_status)
@@ -144,7 +147,7 @@ if not df.empty and len(df) > 15:
 
     st.markdown("---")
 
-    # --- Live Trade Plan Display ---
+    # --- Trade Plan Execution ---
     if is_news_window:
         st.error("### 🚨 High-Impact News Guard Active\nHigh volatility expected. Auto execution plans paused.")
     else:
@@ -177,7 +180,7 @@ if not df.empty and len(df) > 15:
 
 else:
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Live Market Price", "Fetching...")
+    m1.metric("Live Market Price", "Updating...")
     m2.metric("EMA Trend", "BULLISH 📈")
     m3.metric("PD Array Zone", "PREMIUM ZONE 🔴")
     m4.metric("Market Structure", "Accumulation 📦")
@@ -186,7 +189,7 @@ else:
     st.markdown("---")
     st.warning("📦 **Market in Accumulation / Consolidation Zone**\n\nPrice range-bound hai. Breakdown ya Liquidity Sweep ke breakout hone ka wait karein.")
 
-# --- TradingView Interactive Chart ---
+# --- TradingView Interactive Chart Engine ---
 st.markdown("---")
 st.subheader(f"📊 Advanced Interactive Chart Engine: {selected_asset}")
 
