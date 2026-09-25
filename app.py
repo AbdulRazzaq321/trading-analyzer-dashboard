@@ -5,9 +5,9 @@ import numpy as np
 import datetime
 import streamlit.components.v1 as components
 
-# --- Page Config ---
-st.set_page_config(page_title="Institutional ICT/SMC Master Engine", layout="wide")
-st.title("🏛️ Master Multi-Timeframe ICT & SMC Institutional Engine")
+# --- Streamlit Page Config ---
+st.set_page_config(page_title="Institutional SMC & Price Action Engine", layout="wide")
+st.title("🏛️ Master Price Action, SMC & Institutional Engine")
 
 # --- Asset Tickers ---
 asset_dict = {
@@ -23,28 +23,29 @@ asset_dict = {
     "NAS100 (Nasdaq)": {"yf": "^IXIC", "tv": "CAPITALCOM:US100"}
 }
 
-# --- Sidebar Configuration ---
-st.sidebar.header("⚙️ Institutional Controls")
+# --- Sidebar Inputs ---
+st.sidebar.header("⚙️ System Configuration")
 selected_asset = st.sidebar.selectbox("Select Asset / Market", list(asset_dict.keys()))
-lookback_htf = st.sidebar.slider("HTF Structural Sensitivity (4H/1H)", 10, 50, 20)
-lookback_ltf = st.sidebar.slider("15m Execution Sensitivity", 5, 30, 10)
+timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "1h", "4h"], index=1)
+lookback = st.sidebar.slider("Pivot Sensitivity", 5, 30, 10)
+range_len = st.sidebar.slider("Accumulation Lookback", 10, 50, 20)
 
 ticker = asset_dict[selected_asset]["yf"]
 tv_symbol = asset_dict[selected_asset]["tv"]
 
-# --- Multi-Timeframe Data Fetcher ---
-@st.cache_data(ttl=10)
-def fetch_mtf_data(sym):
-    df_4h = yf.download(tickers=sym, period="30d", interval="1h") # Synthesized 4H/1H
-    df_15m = yf.download(tickers=sym, period="5d", interval="15m")
-    
-    for df in [df_4h, df_15m]:
+# --- Data Fetcher ---
+@st.cache_data(ttl=5)
+def load_data(sym, tf):
+    try:
+        df = yf.download(tickers=sym, period="5d", interval=tf)
         df.reset_index(inplace=True)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-    return df_4h, df_15m
+        return df
+    except Exception as e:
+        return pd.DataFrame()
 
-df_htf, df_ltf = fetch_mtf_data(ticker)
+df = load_data(ticker, timeframe)
 
 def trigger_audio_alarm():
     audio_code = """
@@ -54,138 +55,118 @@ def trigger_audio_alarm():
     """
     components.html(audio_code, height=0)
 
-# --- Time & Session Dynamics ---
+# --- News Guard Window Check ---
 now_utc = datetime.datetime.now(datetime.timezone.utc)
 utc_hour = now_utc.hour
 utc_minute = now_utc.minute
-
-# Killzones (UTC)
-is_london_killzone = (7 <= utc_hour < 10)
-is_ny_killzone = (12 <= utc_hour < 15)
-is_silver_bullet = (14 <= utc_hour < 15) or (10 <= utc_hour < 11)  # NY/London Silver Bullet Window
-
-# News Guard
 is_news_window = (utc_minute >= 15 and utc_minute <= 45) and (utc_hour in [12, 13, 14, 18, 19])
 
-# --- Institutional Strategy Engine ---
-if not df_htf.empty and not df_ltf.empty and len(df_ltf) > 40:
+# --- Python Engine Processing ---
+if not df.empty and len(df) > 30:
+    current_price = float(df['Close'].iloc[-1])
     
-    # 1. HTF DAILY BIAS & PREMIUM/DISCOUNT (4H/1H Analysis)
-    htf_high = df_htf['High'].tail(lookback_htf).max()
-    htf_low = df_htf['Low'].tail(lookback_htf).min()
-    htf_equilibrium = (htf_high + htf_low) / 2
-    
-    current_price = df_ltf['Close'].iloc[-1]
-    is_htf_discount = current_price < htf_equilibrium
-    htf_bias = "BULLISH 📈" if is_htf_discount else "BEARISH 📉"
+    # 1. Trend Matrix (EMA 50 / 200)
+    df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+    df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
+    is_uptrend = df['EMA_50'].iloc[-1] > df['EMA_200'].iloc[-1]
+    trend_status = "BULLISH 📈" if is_uptrend else "BEARISH 📉"
 
-    # 2. LTF (15m) CORE SMC CONCEPTS
-    # Swings
-    df_ltf['Swing_High'] = df_ltf['High'].rolling(window=lookback_ltf).max()
-    df_ltf['Swing_Low'] = df_ltf['Low'].rolling(window=lookback_ltf).min()
-    
-    prev_swing_high = df_ltf['Swing_High'].iloc[-3]
-    prev_swing_low = df_ltf['Swing_Low'].iloc[-3]
-    
-    # CHoCH / MSS (Market Structure Shift)
-    choch_bullish = (df_ltf['Close'].iloc[-1] > prev_swing_high) and (df_ltf['Close'].iloc[-2] <= prev_swing_high)
-    choch_bearish = (df_ltf['Close'].iloc[-1] < prev_swing_low) and (df_ltf['Close'].iloc[-2] >= prev_swing_low)
-    
-    # Displacement (Large Body Candle Expansion)
-    avg_candle_size = (df_ltf['High'] - df_ltf['Low']).tail(20).mean()
-    last_candle_size = df_ltf['High'].iloc[-1] - df_ltf['Low'].iloc[-1]
-    is_displacement = last_candle_size > (avg_candle_size * 1.8)
+    # 2. PD Array Engine (Discount vs Premium Zone)
+    recent_high = float(df['High'].tail(50).max())
+    recent_low = float(df['Low'].tail(50).min())
+    equilibrium = (recent_high + recent_low) / 2
+    is_discount = current_price < equilibrium
+    pd_array_status = "DISCOUNT ZONE 🟢" if is_discount else "PREMIUM ZONE 🔴"
 
-    # Liquidity Sweeps (BSL / SSL / Turtle Soup)
-    ssl_sweep = (df_ltf['Low'].iloc[-1] < prev_swing_low) and (df_ltf['Close'].iloc[-1] > prev_swing_low)
-    bsl_sweep = (df_ltf['High'].iloc[-1] > prev_swing_high) and (df_ltf['Close'].iloc[-1] < prev_swing_high)
+    # 3. Accumulation / Consolidation Zone Detection
+    df['SMA_Val'] = df['Close'].rolling(window=range_len).mean()
+    df['StDev_Val'] = df['Close'].rolling(window=range_len).std()
+    df['Is_Accumulation'] = (df['StDev_Val'] / df['SMA_Val'] * 100) < 1.2
+    in_accumulation = bool(df['Is_Accumulation'].iloc[-1])
 
-    # FVG / Inversion FVG / BPR
-    bullish_fvg = df_ltf['Low'].iloc[-1] > df_ltf['High'].iloc[-3]
-    bearish_fvg = df_ltf['High'].iloc[-1] < df_ltf['Low'].iloc[-3]
+    # 4. FVG & CHoCH / Liquidity Sweeps
+    bullish_fvg = float(df['Low'].iloc[-1]) > float(df['High'].iloc[-3])
+    bearish_fvg = float(df['High'].iloc[-1]) < float(df['Low'].iloc[-3])
+
+    df['High_Pivot'] = df['High'].rolling(window=lookback).max()
+    df['Low_Pivot'] = df['Low'].rolling(window=lookback).min()
     
-    # Optimal Trade Entry (OTE) Calculation
-    leg_range = htf_high - htf_low
-    ote_618 = htf_low + (leg_range * 0.382) if is_htf_discount else htf_high - (leg_range * 0.382)
-    ote_705 = htf_low + (leg_range * 0.295) if is_htf_discount else htf_high - (leg_range * 0.295) # Sweet Spot
-    ote_790 = htf_low + (leg_range * 0.210) if is_htf_discount else htf_high - (leg_range * 0.210)
+    last_row = df.iloc[-1]
+    prev_row = df.iloc[-2]
+    
+    ssl_sweep = (float(last_row['Low']) < float(prev_row['Low_Pivot'])) and (float(last_row['Close']) > float(prev_row['Low_Pivot']))
+    bsl_sweep = (float(last_row['High']) > float(prev_row['High_Pivot'])) and (float(last_row['Close']) < float(prev_row['High_Pivot']))
 
-    # --- Live Metric Dashboard ---
+    # --- Live Metric Cards (PURANA COMPLETE LAYOUT RESTORED) ---
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Live Market Price", f"${current_price:.2f}")
-    m2.metric("HTF (4H/1H) Bias", htf_bias)
-    m3.metric("PD Array Zone", "DISCOUNT 🟢" if is_htf_discount else "PREMIUM 🔴")
-    m4.metric("Session / Timing", "Silver Bullet ⚡" if is_silver_bullet else ("NY Killzone 🏛️" if is_ny_killzone else ("London Killzone 🇬🇧" if is_london_killzone else "Asian/Off Session")))
-    m5.metric("News Guard", "⚠️ HIGH RISK" if is_news_window else "SAFE ✅")
+    m2.metric("EMA Trend", trend_status)
+    m3.metric("PD Array Zone", pd_array_status)
+    m4.metric("Market Structure", "Accumulation 📦" if in_accumulation else "Expansion ⚡")
+    m5.metric("Imbalance State", "Bullish FVG" if bullish_fvg else ("Bearish FVG" if bearish_fvg else "Balanced"))
 
     st.markdown("---")
 
-    # --- EXECUTION ENGINE ---
+    # --- Execution Logic & Alerts ---
     if is_news_window:
-        st.error("### 🚨 NEWS GUARD ACTIVE: High-impact news window detects volatile expansion. Auto-bot trade execution is LOCKED.")
+        st.error("### 🚨 HIGH-IMPACT NEWS GUARD ACTIVE!\n"
+                 "High volatility window active hai. Slippage se bachne ke liye Auto-bot execution pause kar di gayi hai.")
     else:
-        # BUY EXECUTION PLAN (HTF Discount + LTF CHoCH/Sweep + FVG/OTE)
-        if is_htf_discount and (choch_bullish or ssl_sweep or bullish_fvg) and is_displacement:
+        # BUY SETUP
+        if (ssl_sweep or (bullish_fvg and is_discount)) and not in_accumulation:
             trigger_audio_alarm()
             entry = current_price
-            sl = df_ltf['Low'].tail(5).min()
-            risk = entry - sl
+            sl = float(last_row['Low'])
+            risk = max(entry - sl, 0.5)
             
-            tp1 = entry + (risk * 2.0)
-            tp2 = entry + (risk * 3.5)
-            tp3 = entry + (risk * 5.0)
+            tp1 = entry + (risk * 1.5)
+            tp2 = entry + (risk * 2.5)
+            tp3 = entry + (risk * 4.0)
 
-            confluences = []
-            if is_htf_discount: confluences.append("HTF (4H/1H) Dealing Range Discount Alignment")
-            if choch_bullish: confluences.append("15m Market Structure Shift (MSS / CHoCH) Confirmed")
-            if ssl_sweep: confluences.append("Sell-Side Liquidity (SSL) Turtle Soup Sweep")
-            if bullish_fvg: confluences.append("Institutional 15m Fair Value Gap (FVG) Displace")
-            if is_silver_bullet: confluences.append("Silver Bullet High-Probability Time Window Active")
+            st.success(f"### 🚀 HIGH PROBABILITY BUY EXECUTION PLAN\n\n"
+                       f"#### 🧠 Active Confluences Triggered:\n"
+                       f"* Sell-Side Liquidity (SSL) Turtle Soup Sweep\n"
+                       f"* PD Array Discount Zone Alignment\n"
+                       f"* Institutional Bullish Fair Value Gap (FVG)\n\n--- \n"
+                       f"* **Entry Price:** `{entry:.2f}`\n"
+                       f"* **Stop Loss (SL):** `{sl:.2f}`\n\n"
+                       f"🎯 **Target 1 (1:1.5 RR):** `{tp1:.2f}`\n"
+                       f"🎯 **Target 2 (1:2.5 RR):** `{tp2:.2f}`\n"
+                       f"🎯 **Target 3 (1:4.0 RR):** `{tp3:.2f}`")
 
-            strat_list = "\n* ".join(confluences)
-
-            st.success(f"### 🚀 HIGH-PROBABILITY INSTITUTIONAL BUY PLAN\n\n"
-                       f"#### 🧠 Active Confluences Triggered:\n* {strat_list}\n\n--- \n"
-                       f"* **Optimal Trade Entry (OTE 70.5%):** `{ote_705:.2f}`\n"
-                       f"* **Current Execution Price:** `{entry:.2f}`\n"
-                       f"* **Invalidation (SL):** `{sl:.2f}`\n\n"
-                       f"🎯 **Target 1 (1:2.0 RR - Partials):** `{tp1:.2f}`\n"
-                       f"🎯 **Target 2 (1:3.5 RR - Breakeven):** `{tp2:.2f}`\n"
-                       f"🎯 **Target 3 (1:5.0 RR - BSL Target):** `{tp3:.2f}`")
-
-        # SELL EXECUTION PLAN (HTF Premium + LTF CHoCH/Sweep + FVG/OTE)
-        elif not is_htf_discount and (choch_bearish or bsl_sweep or bearish_fvg) and is_displacement:
+        # SELL SETUP
+        elif (bsl_sweep or (bearish_fvg and not is_discount)) and not in_accumulation:
             trigger_audio_alarm()
             entry = current_price
-            sl = df_ltf['High'].tail(5).max()
-            risk = sl - entry
+            sl = float(last_row['High'])
+            risk = max(sl - entry, 0.5)
             
-            tp1 = entry - (risk * 2.0)
-            tp2 = entry - (risk * 3.5)
-            tp3 = entry - (risk * 5.0)
+            tp1 = entry - (risk * 1.5)
+            tp2 = entry - (risk * 2.5)
+            tp3 = entry - (risk * 4.0)
 
-            confluences = []
-            if not is_htf_discount: confluences.append("HTF (4H/1H) Dealing Range Premium Alignment")
-            if choch_bearish: confluences.append("15m Market Structure Shift (MSS / CHoCH) Confirmed")
-            if bsl_sweep: confluences.append("Buy-Side Liquidity (BSL) Turtle Soup Sweep")
-            if bearish_fvg: confluences.append("Institutional 15m Fair Value Gap (FVG) Displace")
-            if is_silver_bullet: confluences.append("Silver Bullet High-Probability Time Window Active")
+            st.error(f"### 🔻 HIGH PROBABILITY SELL EXECUTION PLAN\n\n"
+                     f"#### 🧠 Active Confluences Triggered:\n"
+                     f"* Buy-Side Liquidity (BSL) Turtle Soup Sweep\n"
+                     f"* PD Array Premium Zone Alignment\n"
+                     f"* Institutional Bearish Fair Value Gap (FVG)\n\n--- \n"
+                     f"* **Entry Price:** `{entry:.2f}`\n"
+                     f"* **Stop Loss (SL):** `{sl:.2f}`\n\n"
+                     f"🎯 **Target 1 (1:1.5 RR):** `{tp1:.2f}`\n"
+                     f"🎯 **Target 2 (1:2.5 RR):** `{tp2:.2f}`\n"
+                     f"🎯 **Target 3 (1:4.0 RR):** `{tp3:.2f}`")
 
-            strat_list = "\n* ".join(confluences)
-
-            st.error(f"### 🔻 HIGH-PROBABILITY INSTITUTIONAL SELL PLAN\n\n"
-                     f"#### 🧠 Active Confluences Triggered:\n* {strat_list}\n\n--- \n"
-                     f"* **Optimal Trade Entry (OTE 70.5%):** `{ote_705:.2f}`\n"
-                     f"* **Current Execution Price:** `{entry:.2f}`\n"
-                     f"* **Invalidation (SL):** `{sl:.2f}`\n\n"
-                     f"🎯 **Target 1 (1:2.0 RR - Partials):** `{tp1:.2f}`\n"
-                     f"🎯 **Target 2 (1:3.5 RR - Breakeven):** `{tp2:.2f}`\n"
-                     f"🎯 **Target 3 (1:5.0 RR - SSL Target):** `{tp3:.2f}`")
+        elif in_accumulation:
+            st.warning("### 📦 Market in Accumulation / Consolidation Zone\n"
+                       "Price range-bound hai. Breakdown ya Liquidity Sweep ke breakout hone ka wait karein.")
         else:
             st.info("### 🔍 Institutional Engine Scanning...\n"
-                    "HTF Bias aur 15m Displacement/CHoCH setup ka alignment analyze ho raha hai.")
+                    "Multi-confluence alignment scan chal raha hai. Setup bante hi alarm play hoga.")
 
-# --- Interactive Chart ---
+else:
+    st.error("Market Data fetch nahi ho raha. Kripya page refresh karein ya asset change karke dekhein.")
+
+# --- Interactive Chart Engine ---
 st.markdown("---")
 st.subheader(f"📊 Advanced Interactive Chart Engine: {selected_asset}")
 
@@ -198,7 +179,7 @@ tv_widget_pro = f"""
   {{
     "autosize": true,
     "symbol": "{tv_symbol}",
-    "interval": "15",
+    "interval": "{timeframe.replace('m', '').replace('h', '60')}",
     "timezone": "Etc/UTC",
     "theme": "dark",
     "style": "1",
