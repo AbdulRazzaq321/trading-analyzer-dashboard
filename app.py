@@ -5,7 +5,7 @@ import numpy as np
 import datetime
 import streamlit.components.v1 as components
 
-# --- Page Setup & Custom CSS for Mobile & Clean Layout ---
+# --- Page Setup & CSS for Mobile & Clean Layout ---
 st.set_page_config(
     page_title="Master Price Action, SMC & PD Array Engine",
     layout="wide",
@@ -36,10 +36,10 @@ st.markdown("""
 
 st.title("🏛️ Master Price Action, SMC & PD Array Engine")
 
-# --- Asset Tickers & TradingView Mapping ---
+# --- Asset Tickers (TradingView & Spot Matching) ---
 asset_dict = {
-    "Gold (XAUUSD)": {"yf": "GC=F", "yf_alt": "XAUUSD=X", "tv": "OANDA:XAUUSD"},
-    "Silver (XAGUSD)": {"yf": "SI=F", "yf_alt": "XAGUSD=X", "tv": "OANDA:XAGUSD"},
+    "Gold (XAUUSD)": {"yf": "XAUUSD=X", "yf_alt": "GC=F", "tv": "OANDA:XAUUSD"},
+    "Silver (XAGUSD)": {"yf": "XAGUSD=X", "yf_alt": "SI=F", "tv": "OANDA:XAGUSD"},
     "Crude Oil (USOIL)": {"yf": "CL=F", "yf_alt": "CL=F", "tv": "TVC:USOIL"},
     "Bitcoin (BTCUSD)": {"yf": "BTC-USD", "yf_alt": "BTC-USD", "tv": "BITSTAMP:BTCUSD"},
     "Ethereum (ETHUSD)": {"yf": "ETH-USD", "yf_alt": "ETH-USD", "tv": "BITSTAMP:ETHUSD"},
@@ -61,8 +61,8 @@ ticker = asset_dict[selected_asset]["yf"]
 alt_ticker = asset_dict[selected_asset]["yf_alt"]
 tv_symbol = asset_dict[selected_asset]["tv"]
 
-# --- Robust Data Fetching with Dual Ticker Fallback ---
-@st.cache_data(ttl=10)
+# --- Spot-Matched Data Fetcher ---
+@st.cache_data(ttl=5)
 def load_market_data(sym, alt_sym, tf):
     for current_sym in [sym, alt_sym]:
         try:
@@ -176,7 +176,6 @@ if not df.empty and len(df) > 15:
             st.info("🔍 **Institutional Engine Scanning...**\nWaiting for liquidity sweep or FVG alignment.")
 
 else:
-    # If API delay occurs, display layout with clear state
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Live Market Price", "Fetching...")
     m2.metric("EMA Trend", "BULLISH 📈")
